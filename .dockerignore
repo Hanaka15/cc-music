@@ -1,9 +1,0 @@
-node_modules
-.cache
-.git
-.wrangler
-client
-scripts/deploy-cloudrun.sh
-*.md
-.env
-.env.*

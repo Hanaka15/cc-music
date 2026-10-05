@@ -1,16 +1,3 @@
-node_modules/
-.cache/
-.env
-.env.*
-*.log
 .DS_Store
-.wrangler/
-bin/yt-dlp
+*.b64
 cookies.txt
-cookies.b64
-*.cookies
-
-cookies.txt
-*.cookies
-cookies-youtube.txt
-cookies-youtube.b64
