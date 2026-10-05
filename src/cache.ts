@@ -9,10 +9,25 @@ export type CachedTrack = {
   contentType: string;
 };
 
+export type JobStatus =
+  | { status: "ready"; id: string; path: string; contentType: string; size: number }
+  | { status: "pending"; id: string }
+  | { status: "error"; id: string; error: string }
+  | { status: "idle"; id: string };
+
 const inflight = new Map<string, Promise<CachedTrack>>();
+const failures = new Map<string, string>();
 
 function extForFormat(): string {
   return config.audioFormat === "ogg" ? "ogg" : config.audioFormat;
+}
+
+function contentTypeForFormat(): string {
+  return config.audioFormat === "mp3"
+    ? "audio/mpeg"
+    : config.audioFormat === "ogg"
+      ? "audio/ogg"
+      : "audio/mp4";
 }
 
 function cachePathFor(id: string): string {
@@ -50,33 +65,26 @@ export function purgeExpired(): number {
   return removed;
 }
 
-export async function getOrFetch(id: string): Promise<CachedTrack> {
-  const videoId = normalizeId(id);
-  if (!videoId) throw new Error("invalid id");
-
+async function peekReady(videoId: string): Promise<CachedTrack | null> {
   const existing = cachePathFor(videoId);
   const file = Bun.file(existing);
-  if (await file.exists()) {
-    touch(existing);
-    return {
-      id: videoId,
-      path: existing,
-      contentType:
-        config.audioFormat === "mp3"
-          ? "audio/mpeg"
-          : config.audioFormat === "ogg"
-            ? "audio/ogg"
-            : "audio/mp4",
-    };
-  }
+  if (!(await file.exists())) return null;
+  touch(existing);
+  return {
+    id: videoId,
+    path: existing,
+    contentType: contentTypeForFormat(),
+  };
+}
 
+function startJob(videoId: string): Promise<CachedTrack> {
   const pending = inflight.get(videoId);
   if (pending) return pending;
 
+  failures.delete(videoId);
   const job = (async () => {
     mkdirSync(config.cacheDir, { recursive: true });
     const outBase = path.join(config.cacheDir, videoId);
-    // Clean partials from a previous crash
     for (const name of readdirSync(config.cacheDir)) {
       if (name.startsWith(videoId) && name.endsWith(".part")) {
         try {
@@ -86,15 +94,71 @@ export async function getOrFetch(id: string): Promise<CachedTrack> {
         }
       }
     }
+    console.log(`[yt-dlp] start ${videoId}`);
     const result = await downloadAudio(videoId, outBase);
     touch(result.path);
+    console.log(`[yt-dlp] done ${videoId} -> ${result.path}`);
     return { id: videoId, path: result.path, contentType: result.contentType };
-  })().finally(() => {
-    inflight.delete(videoId);
-  });
+  })()
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      failures.set(videoId, msg);
+      console.error(`[yt-dlp] fail ${videoId}`, msg);
+      throw err;
+    })
+    .finally(() => {
+      inflight.delete(videoId);
+    });
 
   inflight.set(videoId, job);
   return job;
+}
+
+/** Kick off download without waiting (Render free tier ~30s HTTP limit). */
+export function beginFetch(id: string): string {
+  const videoId = normalizeId(id);
+  if (!videoId) throw new Error("invalid id");
+  void startJob(videoId).catch(() => {
+    // error stored in failures
+  });
+  return videoId;
+}
+
+export async function getStatus(id: string): Promise<JobStatus> {
+  const videoId = normalizeId(id);
+  if (!videoId) throw new Error("invalid id");
+
+  const ready = await peekReady(videoId);
+  if (ready) {
+    const size = Bun.file(ready.path).size;
+    return {
+      status: "ready",
+      id: videoId,
+      path: ready.path,
+      contentType: ready.contentType,
+      size,
+    };
+  }
+
+  if (failures.has(videoId)) {
+    return { status: "error", id: videoId, error: failures.get(videoId) || "download failed" };
+  }
+
+  if (inflight.has(videoId)) {
+    return { status: "pending", id: videoId };
+  }
+
+  return { status: "idle", id: videoId };
+}
+
+export async function getOrFetch(id: string): Promise<CachedTrack> {
+  const videoId = normalizeId(id);
+  if (!videoId) throw new Error("invalid id");
+
+  const ready = await peekReady(videoId);
+  if (ready) return ready;
+
+  return startJob(videoId);
 }
 
 export function startCacheJanitor() {

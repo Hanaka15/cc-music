@@ -1,5 +1,5 @@
 import { config } from "./config";
-import { getOrFetch, startCacheJanitor } from "./cache";
+import { getOrFetch, beginFetch, getStatus, startCacheJanitor } from "./cache";
 import { search } from "./ytdlp";
 import {
   ccUnauthorized,
@@ -87,7 +87,7 @@ const server = Bun.serve({
       return ccUnauthorized();
     }
 
-    // Warm cache (CC calls this before speakerPlay so Minecraft clients get a fast stream)
+    // Warm cache — returns quickly (Render free HTTP limit ~30s). CC polls until ready.
     const prepareMatch = url.pathname.match(/^\/prepare\/([^/]+)\/?$/);
     if (req.method === "GET" && prepareMatch) {
       const videoId = decodeURIComponent(prepareMatch[1]);
@@ -100,18 +100,39 @@ const server = Bun.serve({
         });
       }
       try {
-        const track = await getOrFetch(videoId);
-        const size = Bun.file(track.path).size;
+        let st = await getStatus(videoId);
+        if (st.status === "idle" || st.status === "error") {
+          // restart on error / start on idle
+          beginFetch(videoId);
+          st = await getStatus(videoId);
+        } else if (st.status === "pending") {
+          // already running
+        }
+
+        if (st.status === "ready") {
+          return Response.json({
+            ok: true,
+            ready: true,
+            id: st.id,
+            size: st.size,
+            contentType: st.contentType,
+          });
+        }
+        if (st.status === "error") {
+          return Response.json({ ok: false, ready: false, error: st.error }, { status: 502 });
+        }
+        // pending
         return Response.json({
           ok: true,
+          ready: false,
+          status: "pending",
           id: videoId,
-          size,
-          contentType: track.contentType,
+          note: "yt-dlp still downloading; poll /prepare again in a few seconds",
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error("[prepare]", videoId, msg);
-        return Response.json({ error: msg }, { status: 502 });
+        return Response.json({ ok: false, ready: false, error: msg }, { status: 502 });
       }
     }
 

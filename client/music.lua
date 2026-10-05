@@ -89,23 +89,43 @@ local function prepareUrlFor(track)
 	return stream:gsub("/stream/", "/prepare/", 1)
 end
 
---- Warm API cache (yt-dlp) before HQ Speakers fetch the mp3.
+--- Warm API cache (yt-dlp). Render free tier kills long HTTP requests (~30s),
+--- so we poll a fast /prepare endpoint until ready=true.
 local function prepareTrack(track)
 	local url = prepareUrlFor(track)
-	status_text = "Preparing audio (can take 30–60s)..."
+	status_text = "Preparing audio (poll; may take 1–2 min)..."
 	os.queueEvent("redraw_screen")
-	local ok, res = pcall(http.get, url)
-	if not ok or not res then
-		return false, "prepare failed (HTTP). Is the API awake?"
+
+	local deadline = os.clock() + 180
+	local attempt = 0
+	while os.clock() < deadline do
+		attempt = attempt + 1
+		status_text = string.format("Preparing… (%ds)", attempt * 3)
+		os.queueEvent("redraw_screen")
+
+		local res, err = http.get({ url = url, timeout = 25 })
+		if not res then
+			-- transient wake / timeout — keep polling unless clearly permanent
+			if attempt >= 3 and err and not tostring(err):find("timed out") then
+				return false, "prepare failed: " .. tostring(err)
+			end
+		else
+			local body = res.readAll()
+			res.close()
+			local data = textutils.unserialiseJSON(body)
+			if type(data) == "table" then
+				if data.ready == true or (data.ok == true and data.size) then
+					return true
+				end
+				if data.error then
+					return false, tostring(data.error)
+				end
+				-- pending — fall through to sleep
+			end
+		end
+		sleep(3)
 	end
-	local body = res.readAll()
-	res.close()
-	local data = textutils.unserialiseJSON(body)
-	if type(data) ~= "table" or data.ok ~= true then
-		local err = type(data) == "table" and data.error or body
-		return false, tostring(err or "prepare failed")
-	end
-	return true
+	return false, "prepare timed out (API still downloading?)"
 end
 
 local function playTrack(track)
