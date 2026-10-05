@@ -1,0 +1,16 @@
+{
+  "name": "cc-music-api",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --hot src/server.ts",
+    "start": "bun run src/server.ts",
+    "docker:build": "docker build -t cc-music-api .",
+    "docker:run": "docker run --rm -p 8080:8080 -e PORT=8080 cc-music-api"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "typescript": "5.9.3"
+  }
+}

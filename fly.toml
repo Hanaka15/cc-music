@@ -1,0 +1,35 @@
+# Deploy from repo root:  fly launch   then  fly deploy
+# After first deploy:  fly secrets set PUBLIC_BASE_URL=https://YOUR_APP.fly.dev
+
+app = "cc-music"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  CACHE_DIR = "/tmp/cc-music-cache"
+  CACHE_TTL_MS = "3600000"
+  AUDIO_FORMAT = "mp3"
+  REQUIRE_CC_UA = "true"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1
