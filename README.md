@@ -1,31 +1,48 @@
 # cc-music
 
-YouTube music for **ComputerCraft** + **CC:HQ Speakers**, with a small **yt-dlp** API you can deploy on **Fly.io**.
+YouTube music for **ComputerCraft** + **CC:HQ Speakers**, with a **yt-dlp** API (Docker).
 
-- **API** — search YouTube, stream MP3 via temporary disk cache (auto-delete, default 1h)
-- **Client** — `client/music.lua` uses `speakerPlay(streamUrl)` (no DFPWM, no files on the MC server)
+- **API** — search YouTube, stream MP3; ephemeral disk cache (default 1h, then delete)
+- **Client** — `client/music.lua` → `speakerPlay(streamUrl)` (nothing stored on the MC server)
 
-## Deploy on Fly.io
+## Deploy on Render (free tier, no card required for basic use)
 
-1. Install [flyctl](https://fly.io/docs/hands-on/install-flyctl/) and log in: `fly auth login`
-2. From this directory:
+Repo: **https://github.com/Hanaka15/cc-music**
 
-```bash
-fly launch --no-deploy
-# Accept Dockerfile, pick region; change app name in fly.toml if needed
+### Option A — Blueprint (easiest)
 
-fly deploy
+1. Open [Render Dashboard](https://dashboard.render.com) → **New** → **Blueprint**
+2. Connect GitHub → select **`Hanaka15/cc-music`**
+3. Render reads `render.yaml` and creates the web service
+4. Wait for deploy; your URL will be like `https://cc-music.onrender.com`
 
-fly secrets set PUBLIC_BASE_URL=https://YOUR_APP.fly.dev
-```
+### Option B — Manual Docker web service
 
-3. On a CC computer, edit `client/music.lua`:
+1. **New** → **Web Service** → connect this repo  
+2. **Runtime:** Docker  
+3. **Plan:** Free  
+4. **Health check path:** `/health`  
+5. Deploy
+
+### After deploy
+
+1. Copy your Render URL (e.g. `https://cc-music.onrender.com`)
+2. Edit `client/music.lua` on the CC computer:
 
 ```lua
-local api_base_url = "https://YOUR_APP.fly.dev/"
+local api_base_url = "https://cc-music.onrender.com/"
 ```
 
-4. Copy the script onto the computer and run it (HTTP enabled on the server).
+3. Enable **HTTP** on the Minecraft/CC server config.
+
+`RENDER_EXTERNAL_URL` is set by Render, so stream links in search JSON should work without extra env vars. If not, set **`PUBLIC_BASE_URL`** in Render → Environment to your exact HTTPS URL.
+
+### Render free tier notes
+
+- Service **sleeps after ~15 minutes** idle — first request wakes it (30–60s+), first song may take longer while yt-dlp runs.
+- **512 MB RAM** — enough for short tracks; very long videos may fail (API default max 30 min).
+
+---
 
 ## Local API
 
@@ -38,23 +55,29 @@ bun run dev
 curl -A 'computercraft/1.100.0' 'http://127.0.0.1:8080/?v=1&search=test'
 ```
 
+---
+
 ## Repo layout
 
 ```
-client/music.lua   # CC:Tweaked + HQ Speakers player
-src/               # Bun API (yt-dlp + ffmpeg)
-Dockerfile         # Used by Fly.io
-fly.toml           # Fly config
+client/music.lua   # CC player (HQ Speakers)
+src/               # Bun + yt-dlp API
+Dockerfile
+render.yaml        # Render Blueprint
+fly.toml           # Optional (Fly.io — often requires card)
 ```
 
-## Environment (Fly secrets / `fly.toml`)
+---
+
+## Environment
 
 | Variable | Purpose |
 |----------|---------|
-| `PUBLIC_BASE_URL` | HTTPS base for stream URLs in search JSON |
-| `CACHE_TTL_MS` | How long to keep cached mp3 on disk (default 1h) |
-| `YTDLP_COOKIES` | Optional path to cookies file if YouTube blocks the host |
+| `PUBLIC_BASE_URL` | Override public HTTPS base for stream URLs |
+| `RENDER_EXTERNAL_URL` | Set automatically on Render |
+| `CACHE_TTL_MS` | Cache lifetime on disk (default 1h) |
+| `YTDLP_COOKIES` | Cookies file path if YouTube blocks the host |
 
-## Notes
+---
 
-Personal / fair-use only. First play after idle may take a while (download + transcode).
+Personal / fair-use only; respect copyright and YouTube ToS.

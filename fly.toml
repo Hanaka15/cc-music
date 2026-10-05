@@ -1,5 +1,5 @@
-# Deploy from repo root:  fly launch   then  fly deploy
-# After first deploy:  fly secrets set PUBLIC_BASE_URL=https://YOUR_APP.fly.dev
+# Optional — Fly.io often requires a credit card. Prefer Render (render.yaml).
+# Deploy: fly launch && fly deploy
 
 app = "cc-music"
 primary_region = "ams"

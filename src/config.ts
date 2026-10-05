@@ -15,8 +15,12 @@ function resolveFfmpeg(): string {
 
 export const config = {
   port: Number(process.env.PORT || 8080),
-  /** Public base URL for stream links (set on Cloud Run). Falls back to request origin. */
-  publicBaseUrl: (process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, ""),
+  /** Stream links in JSON — Render sets RENDER_EXTERNAL_URL automatically. */
+  publicBaseUrl: (
+    process.env.PUBLIC_BASE_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    ""
+  ).replace(/\/+$/, ""),
   audioFormat: (process.env.AUDIO_FORMAT || "mp3") as "mp3" | "ogg" | "m4a",
   audioQuality: process.env.AUDIO_QUALITY || "5",
   cacheDir: process.env.CACHE_DIR || path.join(process.cwd(), ".cache"),

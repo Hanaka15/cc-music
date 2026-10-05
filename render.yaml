@@ -1,0 +1,22 @@
+# Render Blueprint — connect repo at https://dashboard.render.com
+# New → Blueprint → select Hanaka15/cc-music
+services:
+  - type: web
+    name: cc-music
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: CACHE_DIR
+        value: /tmp/cc-music-cache
+      - key: CACHE_TTL_MS
+        value: "3600000"
+      - key: AUDIO_FORMAT
+        value: mp3
+      - key: REQUIRE_CC_UA
+        value: "true"
+      # Render sets PORT and RENDER_EXTERNAL_URL automatically.
+      # Optional override for stream URLs in JSON:
+      # - key: PUBLIC_BASE_URL
+      #   value: https://cc-music.onrender.com
