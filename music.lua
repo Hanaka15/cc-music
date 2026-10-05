@@ -652,47 +652,51 @@ function uiLoop()
 	end
 end
 
-local function playBufferOnSpeakers(this_id)
-	local fn = {}
-	for i, speaker in ipairs(speakers) do
-		fn[i] = function()
-			local name = peripheral.getName(speaker)
-			-- Always retry until accepted. On HQ, also wait once after a successful
-			-- enqueue when the server queue is already near-full so we don't decode
-			-- the whole track in one burst.
-			while true do
-				local ok = speaker.playAudio(buffer, volume)
-				if ok then
-					local queued = nil
-					if has_hq and type(speaker.speakerQueueSize) == "function" then
-						local qok, q = pcall(speaker.speakerQueueSize)
-						if qok then
-							queued = q
-						end
-					end
-					if not queued or queued < 12 then
-						return
-					end
-				end
-				parallel.waitForAny(
-					function()
-						repeat
-						until select(2, os.pullEvent("speaker_audio_empty")) == name
-					end,
-					function()
-						os.pullEvent("playback_stopped")
-					end
-				)
-				if not playing or paused or playing_id ~= this_id then
-					return
-				end
-				if ok then
-					return
-				end
-			end
+-- Wait until a speaker can take more audio. HQ Speakers' empty events use the
+-- computer attachment name, which does not always match peripheral.getName(),
+-- so never filter on the name — and always keep a timer so we cannot hang.
+local function waitForSpeakerRoom(this_id)
+	local timer = os.startTimer(0.1)
+	while true do
+		local ev, p1 = os.pullEvent()
+		if ev == "speaker_audio_empty" or (ev == "timer" and p1 == timer) then
+			return playing and not paused and playing_id == this_id
+		elseif ev == "playback_stopped" then
+			return playing and not paused and playing_id == this_id
+		elseif not playing or paused or playing_id ~= this_id then
+			return false
 		end
 	end
-	return pcall(parallel.waitForAll, table.unpack(fn))
+end
+
+local function playBufferOnSpeakers(this_id)
+	for _, speaker in ipairs(speakers) do
+		while playing and not paused and playing_id == this_id do
+			local ok, accepted = pcall(speaker.playAudio, buffer, volume)
+			if not ok then
+				return false, accepted
+			end
+			if accepted then
+				break
+			end
+			if not waitForSpeakerRoom(this_id) then
+				return true
+			end
+		end
+		if not playing or paused or playing_id ~= this_id then
+			return true
+		end
+	end
+
+	-- HQ drains ~one chunk per tick. Sleep for this buffer's real duration so we
+	-- feed realtime instead of stuffing the queue and then stalling.
+	if has_hq and playing and not paused and playing_id == this_id and type(buffer) == "table" then
+		local dur = #buffer / 48000
+		if dur > 0 then
+			sleep(dur)
+		end
+	end
+	return true
 end
 
 function audioLoop()
@@ -737,9 +741,16 @@ function audioLoop()
 						break
 					end
 
-					buffer = decoder(chunk)
+					local decoded_ok, decoded = pcall(decoder, chunk)
+					if not decoded_ok then
+						needs_next_chunk = 2
+						is_error = true
+						playing = false
+						break
+					end
+					buffer = decoded
 
-					local ok = playBufferOnSpeakers(this_id)
+					local ok, err = playBufferOnSpeakers(this_id)
 					if not ok then
 						needs_next_chunk = 2
 						is_error = true
