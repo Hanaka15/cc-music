@@ -17,12 +17,17 @@ local clicked_result = nil
 
 local playing = false
 local paused = false
+local is_loading = false
 local queue = {}
 local now_playing = nil
 local looping = 0 -- 0 off, 1 queue, 2 song
 local volume = 1.0
 local is_error = false
 local progress_text = nil
+local status_text = nil
+local play_generation = 0
+local seen_playing = false
+local play_started_at = 0
 
 local function collectSpeakers()
 	local found = { peripheral.find("speaker") }
@@ -53,6 +58,8 @@ local function stopAll()
 		if sp.speakerStop then sp.speakerStop() end
 	end)
 	paused = false
+	is_loading = false
+	seen_playing = false
 end
 
 local function applyVolume()
@@ -74,27 +81,86 @@ local function streamUrlFor(track)
 	return api_base_url:gsub("/+$", "") .. "/stream/" .. textutils.urlEncode(track.id)
 end
 
+local function prepareUrlFor(track)
+	if track.prepare and #track.prepare > 0 then
+		return track.prepare
+	end
+	local stream = streamUrlFor(track)
+	return stream:gsub("/stream/", "/prepare/", 1)
+end
+
+--- Warm API cache (yt-dlp) before HQ Speakers fetch the mp3.
+local function prepareTrack(track)
+	local url = prepareUrlFor(track)
+	status_text = "Preparing audio (can take 30–60s)..."
+	os.queueEvent("redraw_screen")
+	local ok, res = pcall(http.get, url)
+	if not ok or not res then
+		return false, "prepare failed (HTTP). Is the API awake?"
+	end
+	local body = res.readAll()
+	res.close()
+	local data = textutils.unserialiseJSON(body)
+	if type(data) ~= "table" or data.ok ~= true then
+		local err = type(data) == "table" and data.error or body
+		return false, tostring(err or "prepare failed")
+	end
+	return true
+end
+
 local function playTrack(track)
+	play_generation = play_generation + 1
+	local gen = play_generation
 	now_playing = track
 	playing = true
 	paused = false
+	is_loading = true
 	is_error = false
 	progress_text = nil
+	seen_playing = false
+	play_started_at = os.clock()
 	stopAll()
+	-- stopAll cleared flags; restore play intent
+	playing = true
+	is_loading = true
+	now_playing = track
+	play_started_at = os.clock()
 	applyVolume()
 	eachSpeaker(function(sp)
 		if sp.setLooping then sp.setLooping(looping == 2) end
 	end)
+	os.queueEvent("redraw_screen")
 
+	-- Prepare in background so UI stays responsive
+	local okPrep, prepErr = prepareTrack(track)
+	if gen ~= play_generation then return end
+	if not okPrep then
+		is_loading = false
+		is_error = true
+		playing = false
+		status_text = tostring(prepErr)
+		os.queueEvent("redraw_screen")
+		return
+	end
+
+	status_text = "Starting speakers..."
+	os.queueEvent("redraw_screen")
 	local url = streamUrlFor(track)
 	local ok, err = pcall(function()
-		-- HQ Speakers: clients stream this URL (mp3/ogg).
-		speaker.speakerPlay(url, volume)
+		local started = speaker.speakerPlay(url, volume)
+		if started == false then
+			error("speakerPlay returned false")
+		end
 	end)
+	if gen ~= play_generation then return end
+	is_loading = false
 	if not ok then
 		is_error = true
 		playing = false
-		printError(err)
+		status_text = tostring(err)
+	else
+		status_text = nil
+		play_started_at = os.clock()
 	end
 	os.queueEvent("redraw_screen")
 end
@@ -113,6 +179,8 @@ local function advanceQueue()
 		now_playing = nil
 		playing = false
 		paused = false
+		is_loading = false
+		status_text = nil
 		stopAll()
 		os.queueEvent("redraw_screen")
 	end
@@ -158,7 +226,10 @@ local function redrawScreen()
 		term.setCursorPos(2, 5)
 		if is_error then
 			term.setTextColor(colors.red)
-			term.write("Play error")
+			term.write(truncate(status_text or "Play error", width - 2))
+		elseif is_loading then
+			term.setTextColor(colors.yellow)
+			term.write(truncate(status_text or "Loading...", width - 2))
 		elseif paused then
 			term.setTextColor(colors.yellow)
 			term.write("Paused")
@@ -169,12 +240,15 @@ local function redrawScreen()
 				term.setTextColor(colors.lightGray)
 				term.write("  " .. progress_text)
 			end
+		elseif status_text then
+			term.setTextColor(colors.orange)
+			term.write(truncate(status_text, width - 2))
 		end
 
 		term.setBackgroundColor(colors.gray)
 		term.setTextColor(colors.white)
 		term.setCursorPos(2, 6)
-		term.write(playing and not paused and " Stop " or " Play ")
+		term.write(playing and not paused and not is_loading and " Stop " or " Play ")
 		term.setCursorPos(9, 6)
 		term.write(paused and " Resume " or " Pause ")
 		term.setCursorPos(18, 6)
@@ -192,7 +266,7 @@ local function redrawScreen()
 		if filled >= 0 then paintutils.drawBox(2, 8, 2 + filled, 8, colors.white) end
 		term.setCursorPos(2, 9)
 		term.setTextColor(colors.gray)
-		term.write("HQ stream · API temp cache")
+		term.write("First play may take ~1 min (API prepare)")
 
 		local row = 11
 		for i = 1, #queue do
@@ -210,7 +284,7 @@ local function redrawScreen()
 		term.setBackgroundColor(colors.lightGray)
 		term.setCursorPos(3, 4)
 		term.setTextColor(colors.black)
-		term.write(truncate(last_search or "Search library...", width - 4))
+		term.write(truncate(last_search or "Search YouTube...", width - 4))
 
 		if in_search_result and search_results then
 			term.setBackgroundColor(colors.black)
@@ -229,15 +303,21 @@ local function redrawScreen()
 			term.setCursorPos(2, 13) term.clearLine() term.write("Cancel")
 		elseif search_results then
 			term.setBackgroundColor(colors.black)
-			for i = 1, #search_results do
-				local y = 7 + (i - 1) * 2
-				if y + 1 > height then break end
-				term.setTextColor(colors.white)
-				term.setCursorPos(2, y)
-				term.write(truncate(search_results[i].name, width - 2))
-				term.setTextColor(colors.lightGray)
-				term.setCursorPos(2, y + 1)
-				term.write(truncate(search_results[i].artist, width - 2))
+			if type(search_results) == "table" and search_results.error then
+				term.setTextColor(colors.red)
+				term.setCursorPos(2, 7)
+				term.write(truncate(tostring(search_results.error), width - 2))
+			else
+				for i = 1, #search_results do
+					local y = 7 + (i - 1) * 2
+					if y + 1 > height then break end
+					term.setTextColor(colors.white)
+					term.setCursorPos(2, y)
+					term.write(truncate(search_results[i].name, width - 2))
+					term.setTextColor(colors.lightGray)
+					term.setCursorPos(2, y + 1)
+					term.write(truncate(search_results[i].artist, width - 2))
+				end
 			end
 		else
 			term.setBackgroundColor(colors.black)
@@ -274,7 +354,6 @@ local function uiLoop()
 						search_results = nil
 						search_error = false
 					else
-						-- empty search = list all
 						last_search = ""
 						last_search_url = api_base_url:gsub("/+$", "") .. "/?v=" .. version .. "&search="
 						http.request(last_search_url)
@@ -310,7 +389,7 @@ local function uiLoop()
 							waiting_for_input = true
 							return
 						end
-						if search_results then
+						if search_results and type(search_results) == "table" and #search_results > 0 then
 							for i = 1, #search_results do
 								if y == 7 + (i - 1) * 2 or y == 8 + (i - 1) * 2 then
 									in_search_result = true
@@ -325,7 +404,9 @@ local function uiLoop()
 						if y == 6 then
 							in_search_result = false
 							queue = {}
-							playTrack(t)
+							tab = 1
+							-- run play off the click handler so prepare can block
+							os.queueEvent("play_track", t)
 						elseif y == 8 then
 							in_search_result = false
 							table.insert(queue, 1, t)
@@ -339,19 +420,21 @@ local function uiLoop()
 					elseif tab == 1 then
 						if y == 6 then
 							if x >= 2 and x < 8 then
-								if playing and not paused then
+								if playing and not paused and not is_loading then
+									play_generation = play_generation + 1
 									playing = false
 									stopAll()
+									status_text = nil
 								elseif paused then
 									paused = false
 									if speaker.speakerResume then speaker.speakerResume() end
-								elseif now_playing then
-									playTrack(now_playing)
-								elseif #queue > 0 then
-									playTrack(table.remove(queue, 1))
+								elseif now_playing and not is_loading then
+									os.queueEvent("play_track", now_playing)
+								elseif #queue > 0 and not is_loading then
+									os.queueEvent("play_track", table.remove(queue, 1))
 								end
 							elseif x >= 9 and x < 17 then
-								if playing then
+								if playing and not is_loading then
 									if paused then
 										paused = false
 										if speaker.speakerResume then speaker.speakerResume() end
@@ -361,7 +444,7 @@ local function uiLoop()
 									end
 								end
 							elseif x >= 18 and x < 24 then
-								if now_playing or #queue > 0 then
+								if (now_playing or #queue > 0) and not is_loading then
 									stopAll()
 									advanceQueue()
 								end
@@ -389,6 +472,10 @@ local function uiLoop()
 				function()
 					os.pullEvent("redraw_screen")
 					redrawScreen()
+				end,
+				function()
+					local _, track = os.pullEvent("play_track")
+					playTrack(track)
 				end
 			)
 		end
@@ -417,32 +504,48 @@ local function httpLoop()
 end
 
 local function watchdogLoop()
-	-- When a non-looping track finishes, advance the queue.
 	while true do
 		sleep(1)
-		if playing and not paused and now_playing and speaker.speakerIsPlaying then
-			local ok, is_on = pcall(speaker.speakerIsPlaying)
+		if playing and not paused and not is_loading and now_playing then
+			local is_on = false
+			local streaming = false
+			if speaker.speakerIsPlaying then
+				local ok, v = pcall(speaker.speakerIsPlaying)
+				if ok then is_on = v and true or false end
+			end
+			if speaker.isStreaming then
+				local ok, v = pcall(speaker.isStreaming)
+				if ok then streaming = v and true or false end
+			end
 			local q = 0
 			if speaker.speakerQueueSize then
 				local qok, qn = pcall(speaker.speakerQueueSize)
 				if qok and type(qn) == "number" then q = qn end
 			end
-			if ok and is_on == false and q == 0 then
-				-- finished
+
+			if is_on or streaming or q > 0 then
+				seen_playing = true
+			end
+
+			-- Only advance after we actually heard playback, and after a grace period.
+			local elapsed = os.clock() - play_started_at
+			if seen_playing and not is_on and not streaming and q == 0 and elapsed > 3 then
 				if looping == 2 then
 					playTrack(now_playing)
 				else
 					advanceQueue()
 				end
 			end
+
 			if speaker.speakerProgress then
 				local pok, prog = pcall(speaker.speakerProgress)
 				if pok and type(prog) == "table" then
-					local elapsed = prog.elapsed or prog.elapsedSamples
+					local samples = prog.elapsed or prog.elapsedSamples
 					local rate = prog.sampleRate or 48000
-					if type(elapsed) == "number" and rate > 0 then
-						local secs = math.floor(elapsed / rate)
+					if type(samples) == "number" and rate > 0 then
+						local secs = math.floor(samples / rate)
 						progress_text = string.format("%d:%02d", math.floor(secs / 60), secs % 60)
+						if tab == 1 then os.queueEvent("redraw_screen") end
 					end
 				end
 			end

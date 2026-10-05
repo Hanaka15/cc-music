@@ -18,13 +18,17 @@ function toResult(
   hit: { id: string; name: string; artist: string; duration?: number; type: string },
   origin: string,
 ) {
+  const stream = streamUrl(origin, hit.id);
+  // prepare = same signed query, warms yt-dlp cache without sending the mp3 body
+  const prepare = stream.replace("/stream/", "/prepare/");
   return {
     id: hit.id,
     name: hit.name,
     artist: hit.artist,
     duration: hit.duration,
     type: hit.type,
-    stream: streamUrl(origin, hit.id),
+    stream,
+    prepare,
   };
 }
 
@@ -80,6 +84,34 @@ const server = Bun.serve({
       }
 
       return ccUnauthorized();
+    }
+
+    // Warm cache (CC calls this before speakerPlay so Minecraft clients get a fast stream)
+    const prepareMatch = url.pathname.match(/^\/prepare\/([^/]+)\/?$/);
+    if (req.method === "GET" && prepareMatch) {
+      const videoId = decodeURIComponent(prepareMatch[1]);
+      const exp = url.searchParams.get("exp");
+      const sig = url.searchParams.get("sig");
+      if (!verifyStreamAccess(videoId, exp, sig)) {
+        return new Response("Forbidden — get a prepare URL from ComputerCraft search", {
+          status: 403,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
+      try {
+        const track = await getOrFetch(videoId);
+        const size = Bun.file(track.path).size;
+        return Response.json({
+          ok: true,
+          id: videoId,
+          size,
+          contentType: track.contentType,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("[prepare]", videoId, msg);
+        return Response.json({ error: msg }, { status: 502 });
+      }
     }
 
     // Stream: Minecraft client (HQ Speakers) — no CC User-Agent; requires signed URL from search
