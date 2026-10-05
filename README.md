@@ -80,6 +80,29 @@ fly.toml           # Optional (Fly.io — often requires card)
 
 ---
 
+## YouTube “Sign in to confirm you’re not a bot”
+
+Render’s IP is a datacenter address. YouTube often blocks yt-dlp there unless you pass **cookies from a logged-in browser**.
+
+1. On your PC, export Netscape `cookies.txt` while logged into [youtube.com](https://www.youtube.com)  
+   (browser extension “Get cookies.txt LOCALLY”, or `yt-dlp --cookies-from-browser firefox --cookies cookies.txt --skip-download 'https://www.youtube.com'`).
+2. Encode it:
+
+```bash
+./scripts/cookies-to-b64.sh ./cookies.txt
+```
+
+3. In **Render → your service → Environment**, add secret:
+
+| Key | Value |
+|-----|--------|
+| `YTDLP_COOKIES_B64` | paste the one-line base64 output |
+
+4. **Save** → wait for redeploy. Check `GET /health` — `"cookiesConfigured": true`.
+
+Cookies expire / get rotated; if bot checks return, re-export and update the secret.  
+Do **not** commit `cookies.txt` to git.
+
 ## Security
 
 - **Search / metadata** — only requests with `User-Agent: computercraft/...` (CC:T HTTP API).

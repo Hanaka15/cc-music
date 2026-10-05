@@ -18,6 +18,9 @@ services:
         value: "true"
       - key: REQUIRE_SIGNED_STREAMS
         value: "true"
+      # Required for most Render deploys (YouTube bot check):
+      # - key: YTDLP_COOKIES_B64
+      #   sync: false
       # Generate a random string in Render dashboard → Environment (recommended):
       # - key: STREAM_SIGNING_SECRET
       #   sync: false

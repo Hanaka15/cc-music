@@ -50,6 +50,7 @@ const server = Bun.serve({
         cacheTtlMs: config.cacheTtlMs,
         requireCcUa: config.requireCcUa,
         requireSignedStreams: config.requireSignedStreams,
+        cookiesConfigured: Boolean(config.cookiesFile),
       });
     }
 
