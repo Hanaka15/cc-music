@@ -32,7 +32,6 @@ local is_loading = false
 local is_error = false
 
 local player_handle = nil
-local start = nil
 local size = nil
 local decoder = require "cc.audio.dfpwm".make_decoder()
 local needs_next_chunk = 0
@@ -57,6 +56,12 @@ if #speakers == 0 then
 end
 
 local has_hq = type(speakers[1].speakerStop) == "function"
+
+-- HQ Speakers sends one queued PCM chunk to the client every game tick and drops
+-- overflow. A vanilla 16KiB DFPWM chunk is ~2.7s of audio, so feeding those makes
+-- playback race and the decoder hit "too long without yielding".
+-- 48000 samples/sec / 20 ticks / 8 samples-per-DFPWM-byte = 300 bytes/tick.
+local CHUNK_SIZE = has_hq and 300 or (16 * 1024)
 
 local function eachSpeaker(fn)
 	for _, speaker in ipairs(speakers) do
@@ -183,7 +188,7 @@ local function advanceQueue(from_end_of_track)
 		playing_id = nil
 		is_loading = false
 		is_error = false
-		stopAllSpeakers()
+		-- Do not speakerStop here: HQ still has a short buffer of the song end.
 	end
 end
 
@@ -647,16 +652,72 @@ function uiLoop()
 	end
 end
 
+local function playBufferOnSpeakers(this_id)
+	local fn = {}
+	for i, speaker in ipairs(speakers) do
+		fn[i] = function()
+			local name = peripheral.getName(speaker)
+			-- Always retry until accepted. On HQ, also wait once after a successful
+			-- enqueue when the server queue is already near-full so we don't decode
+			-- the whole track in one burst.
+			while true do
+				local ok = speaker.playAudio(buffer, volume)
+				if ok then
+					local queued = nil
+					if has_hq and type(speaker.speakerQueueSize) == "function" then
+						local qok, q = pcall(speaker.speakerQueueSize)
+						if qok then
+							queued = q
+						end
+					end
+					if not queued or queued < 12 then
+						return
+					end
+				end
+				parallel.waitForAny(
+					function()
+						repeat
+						until select(2, os.pullEvent("speaker_audio_empty")) == name
+					end,
+					function()
+						os.pullEvent("playback_stopped")
+					end
+				)
+				if not playing or paused or playing_id ~= this_id then
+					return
+				end
+				if ok then
+					return
+				end
+			end
+		end
+	end
+	return pcall(parallel.waitForAll, table.unpack(fn))
+end
+
 function audioLoop()
 	while true do
 		if playing and now_playing and not paused then
 			local this_id = now_playing.id
 			if playing_id ~= this_id then
+				-- Cut any leftover buffered audio from the previous track.
+				eachSpeaker(function(speaker)
+					if type(speaker.speakerStop) == "function" then
+						speaker.speakerStop()
+					elseif type(speaker.stop) == "function" then
+						speaker.stop()
+					end
+				end)
+				decoder = require "cc.audio.dfpwm".make_decoder()
 				playing_id = this_id
 				last_download_url = api_base_url .. "?v=" .. version .. "&id=" .. textutils.urlEncode(playing_id)
 				playing_status = 0
 				needs_next_chunk = 1
 				progress_text = nil
+				if player_handle then
+					pcall(player_handle.close)
+					player_handle = nil
+				end
 				http.request({ url = last_download_url, binary = true })
 				is_loading = true
 				os.queueEvent("redraw_screen")
@@ -665,46 +726,20 @@ function audioLoop()
 				while playing and playing_id == this_id and not paused do
 					local chunk = player_handle.read(size)
 					if not chunk then
-						advanceQueue(true)
-						os.queueEvent("redraw_screen")
 						if player_handle then
 							player_handle.close()
 							player_handle = nil
 						end
 						needs_next_chunk = 0
 						playing_status = 0
+						advanceQueue(true)
+						os.queueEvent("redraw_screen")
 						break
-					end
-
-					if start then
-						chunk, start = start .. chunk, nil
-						size = size + 4
 					end
 
 					buffer = decoder(chunk)
 
-					local fn = {}
-					for i, speaker in ipairs(speakers) do
-						fn[i] = function()
-							local name = peripheral.getName(speaker)
-							while not speaker.playAudio(buffer, volume) do
-								parallel.waitForAny(
-									function()
-										repeat
-										until select(2, os.pullEvent("speaker_audio_empty")) == name
-									end,
-									function()
-										os.pullEvent("playback_stopped")
-									end
-								)
-								if not playing or paused or playing_id ~= this_id then
-									return
-								end
-							end
-						end
-					end
-
-					local ok = pcall(parallel.waitForAll, table.unpack(fn))
+					local ok = playBufferOnSpeakers(this_id)
 					if not ok then
 						needs_next_chunk = 2
 						is_error = true
@@ -734,8 +769,7 @@ function httpLoop()
 				elseif url == last_download_url then
 					is_loading = false
 					player_handle = handle
-					start = handle.read(4)
-					size = 16 * 1024 - 4
+					size = CHUNK_SIZE
 					playing_status = 1
 					os.queueEvent("redraw_screen")
 					os.queueEvent("audio_update")
