@@ -6,3 +6,9 @@ node_modules/
 .DS_Store
 .wrangler/
 bin/yt-dlp
+cookies.txt
+cookies.b64
+*.cookies
+
+cookies.txt
+*.cookies

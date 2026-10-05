@@ -16,9 +16,9 @@ function baseArgs(): string[] {
     "--no-warnings",
     "--socket-timeout",
     "20",
-    // Helps a bit on datacenter IPs; cookies are still required when YT challenges.
-    "--extractor-args",
-    "youtube:player_client=android,web",
+    // YouTube requires a JS runtime to solve player challenges (EJS).
+    "--js-runtimes",
+    config.jsRuntime,
   ];
   if (config.cookiesFile) {
     args.push("--cookies", config.cookiesFile);

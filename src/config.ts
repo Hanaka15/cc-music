@@ -68,6 +68,8 @@ export const config = {
   requireSignedStreams: (process.env.REQUIRE_SIGNED_STREAMS || "true") !== "false",
   ytdlp: resolveYtdlp(),
   ffmpeg: resolveFfmpeg(),
+  /** yt-dlp --js-runtimes (bun works in our Docker image; node/deno also ok) */
+  jsRuntime: process.env.YTDLP_JS_RUNTIME || "bun",
   cookiesFile: resolveCookiesFile(),
   maxDurationSec: Number(process.env.MAX_DURATION_SEC || 60 * 30),
 };

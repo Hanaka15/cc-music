@@ -17,7 +17,8 @@ ENV PORT=8080 \
     AUDIO_FORMAT=mp3 \
     REQUIRE_CC_UA=true \
     YTDLP_PATH=/usr/local/bin/yt-dlp \
-    FFMPEG_PATH=/usr/bin/ffmpeg
+    FFMPEG_PATH=/usr/bin/ffmpeg \
+    YTDLP_JS_RUNTIME=bun
 
 RUN mkdir -p /tmp/cc-music-cache
 EXPOSE 8080
