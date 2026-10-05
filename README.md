@@ -80,4 +80,10 @@ fly.toml           # Optional (Fly.io — often requires card)
 
 ---
 
+## Security
+
+- **Search / metadata** — only requests with `User-Agent: computercraft/...` (CC:T HTTP API).
+- **Streams** — `/stream/:id` without a signature returns 403. Search returns signed URLs (`?exp=&sig=`) for HQ Speakers; browsers cannot search, so they cannot obtain valid stream links.
+- Set **`STREAM_SIGNING_SECRET`** on Render to a long random string (recommended after deploy).
+
 Personal / fair-use only; respect copyright and YouTube ToS.

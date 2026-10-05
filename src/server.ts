@@ -1,17 +1,12 @@
 import { config } from "./config";
 import { getOrFetch, startCacheJanitor } from "./cache";
 import { search } from "./ytdlp";
-
-function isComputerCraft(ua: string | null): boolean {
-  return !!ua && /computercraft\//i.test(ua);
-}
-
-function unauthorized(): Response {
-  return new Response("This API only works from inside of the ComputerCraft program", {
-    status: 403,
-    headers: { "content-type": "text/plain; charset=utf-8" },
-  });
-}
+import {
+  ccUnauthorized,
+  requireComputerCraft,
+  streamUrl,
+  verifyStreamAccess,
+} from "./auth";
 
 function originFrom(req: Request): string {
   if (config.publicBaseUrl) return config.publicBaseUrl;
@@ -19,14 +14,17 @@ function originFrom(req: Request): string {
   return url.origin;
 }
 
-function toResult(hit: { id: string; name: string; artist: string; duration?: number; type: string }, origin: string) {
+function toResult(
+  hit: { id: string; name: string; artist: string; duration?: number; type: string },
+  origin: string,
+) {
   return {
     id: hit.id,
     name: hit.name,
     artist: hit.artist,
     duration: hit.duration,
     type: hit.type,
-    stream: `${origin}/stream/${encodeURIComponent(hit.id)}`,
+    stream: streamUrl(origin, hit.id),
   };
 }
 
@@ -38,24 +36,28 @@ const server = Bun.serve({
 
   async fetch(req) {
     const url = new URL(req.url);
-    const ua = req.headers.get("user-agent");
 
+    // Render health check — no CC required
     if (req.method === "GET" && url.pathname === "/health") {
       return Response.json({
         ok: true,
         ytdlp: config.ytdlp,
         format: config.audioFormat,
         cacheTtlMs: config.cacheTtlMs,
+        requireCcUa: config.requireCcUa,
+        requireSignedStreams: config.requireSignedStreams,
       });
     }
 
-    // Compatible with the old iPod-style query API
+    // iPod-style API — ComputerCraft only
     if (req.method === "GET" && url.pathname === "/") {
+      const ccBlock = requireComputerCraft(req);
+      if (ccBlock) return ccBlock;
+
       const searchQ = url.searchParams.get("search");
       const id = url.searchParams.get("id");
 
       if (searchQ !== null) {
-        if (config.requireCcUa && !isComputerCraft(ua)) return unauthorized();
         try {
           const hits = await search(searchQ);
           const origin = originFrom(req);
@@ -67,7 +69,6 @@ const server = Bun.serve({
       }
 
       if (id) {
-        if (config.requireCcUa && !isComputerCraft(ua)) return unauthorized();
         try {
           const hits = await search(id);
           if (!hits[0]) return Response.json({ error: "not found" }, { status: 404 });
@@ -78,35 +79,31 @@ const server = Bun.serve({
         }
       }
 
-      return Response.json({
-        name: "cc-music-api",
-        version: "2",
-        engine: "yt-dlp",
-        storage: "ephemeral-cache",
-        cacheTtlMs: config.cacheTtlMs,
-        endpoints: {
-          search: "/?v=1&search=query",
-          track: "/?v=1&id=youtubeId",
-          stream: "/stream/:id  (public — HQ Speakers / game clients)",
-          health: "/health",
-        },
-        note: "Audio is cached on disk temporarily then deleted. Nothing permanent.",
-      });
+      return ccUnauthorized();
     }
 
-    // PUBLIC stream for HQ Speakers (Minecraft clients do not send CC User-Agent)
+    // Stream: Minecraft client (HQ Speakers) — no CC User-Agent; requires signed URL from search
     const streamMatch = url.pathname.match(/^\/stream\/([^/]+)\/?$/);
     if (req.method === "GET" && streamMatch) {
-      const id = decodeURIComponent(streamMatch[1]);
+      const videoId = decodeURIComponent(streamMatch[1]);
+      const exp = url.searchParams.get("exp");
+      const sig = url.searchParams.get("sig");
+
+      if (!verifyStreamAccess(videoId, exp, sig)) {
+        return new Response("Forbidden — get a stream URL from ComputerCraft search", {
+          status: 403,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
+
       try {
-        const track = await getOrFetch(id);
+        const track = await getOrFetch(videoId);
         const file = Bun.file(track.path);
         const size = file.size;
         const headers = new Headers({
           "content-type": track.contentType,
           "cache-control": "private, max-age=300",
           "accept-ranges": "bytes",
-          "access-control-allow-origin": "*",
         });
 
         const range = req.headers.get("range");
@@ -127,26 +124,18 @@ const server = Bun.serve({
         return new Response(file, { status: 200, headers });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error("[stream]", id, msg);
+        console.error("[stream]", videoId, msg);
         return Response.json({ error: msg }, { status: 502 });
       }
     }
 
-    if (req.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "access-control-allow-origin": "*",
-          "access-control-allow-methods": "GET, OPTIONS",
-          "access-control-allow-headers": "*",
-        },
-      });
-    }
+    const ccBlock = requireComputerCraft(req);
+    if (ccBlock) return ccBlock;
 
     return new Response("not found", { status: 404 });
   },
 });
 
 console.log(
-  `[cc-music-api] http://127.0.0.1:${server.port}  ytdlp=${config.ytdlp}  format=${config.audioFormat}  ttl=${config.cacheTtlMs}ms`,
+  `[cc-music-api] http://127.0.0.1:${server.port}  cc-only=${config.requireCcUa}  signed-streams=${config.requireSignedStreams}`,
 );

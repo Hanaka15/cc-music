@@ -16,6 +16,11 @@ services:
         value: mp3
       - key: REQUIRE_CC_UA
         value: "true"
+      - key: REQUIRE_SIGNED_STREAMS
+        value: "true"
+      # Generate a random string in Render dashboard → Environment (recommended):
+      # - key: STREAM_SIGNING_SECRET
+      #   sync: false
       # Render sets PORT and RENDER_EXTERNAL_URL automatically.
       # Optional override for stream URLs in JSON:
       # - key: PUBLIC_BASE_URL

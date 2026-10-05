@@ -28,6 +28,11 @@ export const config = {
   cacheTtlMs: Number(process.env.CACHE_TTL_MS || 1000 * 60 * 60),
   maxSearchResults: Number(process.env.MAX_SEARCH_RESULTS || 10),
   requireCcUa: (process.env.REQUIRE_CC_UA || "true") !== "false",
+  /** HMAC secret for /stream links returned from search (set on Render for production). */
+  streamSigningSecret:
+    process.env.STREAM_SIGNING_SECRET || "cc-music-dev-change-in-production",
+  streamTokenTtlSec: Number(process.env.STREAM_TOKEN_TTL_SEC || 60 * 60 * 24),
+  requireSignedStreams: (process.env.REQUIRE_SIGNED_STREAMS || "true") !== "false",
   ytdlp: resolveYtdlp(),
   ffmpeg: resolveFfmpeg(),
   cookiesFile: process.env.YTDLP_COOKIES || "",
