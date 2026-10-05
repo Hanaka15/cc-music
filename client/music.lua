@@ -1,7 +1,7 @@
 -- CC Music Player — CC:HQ Speakers + yt-dlp API (Render / Docker)
 -- Requires CC:HQ Speakers (speakerPlay). Set your deployed API URL below.
 
-local api_base_url = "https://cc-music.onrender.com/"
+local api_base_url = "https://cc-music-z3gz.onrender.com/"
 local version = "1"
 
 local width, height = term.getSize()

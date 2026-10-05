@@ -19,4 +19,4 @@ services:
       # Render sets PORT and RENDER_EXTERNAL_URL automatically.
       # Optional override for stream URLs in JSON:
       # - key: PUBLIC_BASE_URL
-      #   value: https://cc-music.onrender.com
+      #   value: https://cc-music-z3gz.onrender.com
